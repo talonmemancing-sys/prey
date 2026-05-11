@@ -680,7 +680,7 @@ footer { padding: 50px 0 28px; border-top: 1px solid var(--line); margin-top: 40
             <a href="#how">How it works</a>
             <a href="#history">History</a>
             <a href="#faq">FAQ</a>
-            <a href="https://etherscan.io/address/0x2CF3B1D60600B7F7e582901Db9f956D8F7fd40cc" target="_blank">Contract ↗</a>
+            <a href="https://etherscan.io/address/0xa1e9f6d88adb3d6b07f9d4fa0e0add67582a80cc" target="_blank">Contract ↗</a>
         </div>
         <button class="connect-btn" id="connectBtn">Connect</button>
     </div>
@@ -889,40 +889,11 @@ footer { padding: 50px 0 28px; border-top: 1px solid var(--line); margin-top: 40
             <div>Pot</div>
             <div>Winners</div>
         </div>
-        <div class="history-row">
-            <div class="h-round">#46</div>
-            <div class="h-number">8 4 2 9 1 7</div>
-            <div class="h-score">6/6 match</div>
-            <div class="h-pot">1.172 ETH</div>
-            <div class="h-winners">1 winner</div>
-        </div>
-        <div class="history-row">
-            <div class="h-round">#45</div>
-            <div class="h-number">3 0 5 1 9 2</div>
-            <div class="h-score">4/6 match</div>
-            <div class="h-pot">0.586 ETH</div>
-            <div class="h-winners">3 winners</div>
-        </div>
-        <div class="history-row">
-            <div class="h-round">#44</div>
-            <div class="h-number">7 7 4 2 0 8</div>
-            <div class="h-score">5/6 match</div>
-            <div class="h-pot">0.838 ETH</div>
-            <div class="h-winners">1 winner</div>
-        </div>
-        <div class="history-row">
-            <div class="h-round">#43</div>
-            <div class="h-number">1 2 3 4 5 6</div>
-            <div class="h-score">3/6 match</div>
-            <div class="h-pot">0.387 ETH</div>
-            <div class="h-winners">7 winners</div>
-        </div>
-        <div class="history-row">
-            <div class="h-round">#42</div>
-            <div class="h-number">9 0 0 0 0 0</div>
-            <div class="h-score">6/6 match</div>
-            <div class="h-pot">1.959 ETH</div>
-            <div class="h-winners">1 winner</div>
+        <div id="historyRows">
+            <div class="empty-state" style="grid-column: 1 / -1; padding: 32px 16px;">
+                <div class="glyph">⌖</div>
+                Loading on-chain history…
+            </div>
         </div>
     </div>
 </section>
@@ -987,8 +958,8 @@ footer { padding: 50px 0 28px; border-top: 1px solid var(--line); margin-top: 40
             </div>
             <div class="f-col">
                 <h5>Protocol</h5>
-                <a href="https://etherscan.io/address/0x2CF3B1D60600B7F7e582901Db9f956D8F7fd40cc" target="_blank">Contract</a>
-                <a href="https://app.uniswap.org/swap?outputCurrency=0x2CF3B1D60600B7F7e582901Db9f956D8F7fd40cc&chain=mainnet" target="_blank">Swap on Uniswap</a>
+                <a href="https://etherscan.io/address/0xa1e9f6d88adb3d6b07f9d4fa0e0add67582a80cc" target="_blank">Contract</a>
+                <a href="https://app.uniswap.org/swap?outputCurrency=0xa1e9f6d88adb3d6b07f9d4fa0e0add67582a80cc&chain=mainnet" target="_blank">Swap on Uniswap</a>
                 <a href="https://docs.chain.link/vrf" target="_blank">Chainlink VRF</a>
             </div>
             <div class="f-col">
@@ -1009,7 +980,7 @@ footer { padding: 50px 0 28px; border-top: 1px solid var(--line); margin-top: 40
 import { ethers } from "https://esm.sh/ethers@6.13.4";
 
 // ────────── CONFIG ──────────
-const CONTRACT = '0x2CF3B1D60600B7F7e582901Db9f956D8F7fd40cc';
+const CONTRACT = '0xa1e9f6d88adb3d6b07f9d4fa0e0add67582a80cc';
 const POOL_MANAGER = '0x000000000004444c5dc75cB358380D2e3dE08A90';
 const CHAIN_ID = 1; // Ethereum Mainnet
 const RPC_FALLBACK = 'https://eth.llamarpc.com';
@@ -1058,6 +1029,7 @@ const state = {
     winningNumber: null,
     myBalance: 0n,
     myTickets: [],
+    history: [],
     connected: false,
 };
 
@@ -1075,15 +1047,21 @@ async function initRead() {
     contract = new ethers.Contract(CONTRACT, ABI, provider);
 }
 
-// ────────── ALTAR ANIMATION (cosmetic) ──────────
+// ────────── ALTAR (animates until VRF reveals winning number) ──────────
 const altarEl = document.getElementById('altarDigits');
 function rotateAltar() {
+    // If we have a real winning number (Scoring or Settled phase), freeze on it
+    if (state.winningNumber !== null && state.winningNumber !== undefined) {
+        altarEl.textContent = String(state.winningNumber).padStart(6, '0').split('').join(' ');
+        altarEl.classList.add('revealed');
+        return;
+    }
+    altarEl.classList.remove('revealed');
     if (Math.random() > 0.5) {
         const newDigits = String(Math.floor(Math.random() * 1000000)).padStart(6, '0');
         altarEl.textContent = newDigits.split('').join(' ');
     }
 }
-altarEl.textContent = '142857'.split('').join(' ');
 setInterval(rotateAltar, 800);
 
 // ────────── HELPERS ──────────
@@ -1127,6 +1105,37 @@ async function fetchRoundData() {
         }
     } catch (e) {
         console.error('fetchRoundData failed:', e);
+    }
+}
+
+async function fetchHistory() {
+    // Past rounds = roundId - 1 down to roundId - 5 (or 1 if fewer)
+    const current = state.roundId;
+    if (current <= 1) {
+        renderHistoryEmpty();
+        return;
+    }
+    const rounds = [];
+    const start = current - 1;
+    const end = Math.max(1, current - 5);
+    try {
+        for (let id = start; id >= end; id--) {
+            const r = await contract.rounds(id);
+            // Only show settled rounds
+            if (Number(r.phase) === 3) {
+                rounds.push({
+                    id,
+                    winningNumber: Number(r.winningNumber),
+                    topScore: Number(r.topScore),
+                    potEth: r.potEth,
+                    topScorerCount: Number(r.topScorerCount),
+                });
+            }
+        }
+        state.history = rounds;
+        renderHistory();
+    } catch (e) {
+        console.error('fetchHistory failed:', e);
     }
 }
 
@@ -1225,6 +1234,37 @@ function renderTickets() {
             <div class="ticket-meta">1.0M staked<br>Round ${t.round}</div>
         </div>
     `).join('');
+}
+
+function renderHistoryEmpty() {
+    document.getElementById('historyRows').innerHTML = `
+        <div class="empty-state" style="grid-column: 1 / -1; padding: 32px 16px;">
+            <div class="glyph">⌖</div>
+            No completed rounds yet.<br>
+            Round 1 is in progress.
+        </div>`;
+}
+
+function renderHistory() {
+    const el = document.getElementById('historyRows');
+    if (!state.history || state.history.length === 0) {
+        renderHistoryEmpty();
+        return;
+    }
+    el.innerHTML = state.history.map(r => {
+        const winners = r.topScorerCount === 0 ? 'no winner'
+                      : r.topScorerCount === 1 ? '1 winner'
+                      : `${r.topScorerCount} winners`;
+        return `
+            <div class="history-row">
+                <div class="h-round">#${r.id}</div>
+                <div class="h-number">${String(r.winningNumber).padStart(6, '0').split('').join(' ')}</div>
+                <div class="h-score">${r.topScore}/6 match</div>
+                <div class="h-pot">${parseFloat(ethers.formatEther(r.potEth)).toFixed(3)} ETH</div>
+                <div class="h-winners">${winners}</div>
+            </div>
+        `;
+    }).join('');
 }
 
 // ────────── DIGIT INPUTS ──────────
@@ -1357,6 +1397,7 @@ document.getElementById('settleBtn').addEventListener('click', async () => {
 async function fullRefresh() {
     await fetchRoundData();
     if (state.connected) await fetchMyData();
+    await fetchHistory();
     render();
 }
 
