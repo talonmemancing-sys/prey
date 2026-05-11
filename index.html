@@ -680,7 +680,7 @@ footer { padding: 50px 0 28px; border-top: 1px solid var(--line); margin-top: 40
             <a href="#how">How it works</a>
             <a href="#history">History</a>
             <a href="#faq">FAQ</a>
-            <a href="https://etherscan.io/address/0x0000000000000000000000000000000000000000" target="_blank">Contract ↗</a>
+            <a href="https://etherscan.io/address/0x2CF3B1D60600B7F7e582901Db9f956D8F7fd40cc" target="_blank">Contract ↗</a>
         </div>
         <button class="connect-btn" id="connectBtn">Connect</button>
     </div>
@@ -987,14 +987,13 @@ footer { padding: 50px 0 28px; border-top: 1px solid var(--line); margin-top: 40
             </div>
             <div class="f-col">
                 <h5>Protocol</h5>
-                <a href="https://etherscan.io/address/0x0000000000000000000000000000000000000000" target="_blank">Contract</a>
-                <a href="https://app.uniswap.org/" target="_blank">Uniswap</a>
+                <a href="https://etherscan.io/address/0x2CF3B1D60600B7F7e582901Db9f956D8F7fd40cc" target="_blank">Contract</a>
+                <a href="https://app.uniswap.org/swap?outputCurrency=0x2CF3B1D60600B7F7e582901Db9f956D8F7fd40cc&chain=mainnet" target="_blank">Swap on Uniswap</a>
                 <a href="https://docs.chain.link/vrf" target="_blank">Chainlink VRF</a>
             </div>
             <div class="f-col">
                 <h5>Social</h5>
-                <a href="https://x.com/pyre" target="_blank">X / Twitter</a>
-                <a href="https://t.me/pyre" target="_blank">Telegram</a>
+                <a href="https://x.com/pyreoneth" target="_blank">X / Twitter</a>
             </div>
         </div>
         <div class="f-bottom">
@@ -1006,24 +1005,77 @@ footer { padding: 50px 0 28px; border-top: 1px solid var(--line); margin-top: 40
 
 </main>
 
-<script>
-const CONTRACT = '0x0000000000000000000000000000000000000000';
+<script type="module">
+import { ethers } from "https://esm.sh/ethers@6.13.4";
+
+// ────────── CONFIG ──────────
+const CONTRACT = '0x2CF3B1D60600B7F7e582901Db9f956D8F7fd40cc';
+const POOL_MANAGER = '0x000000000004444c5dc75cB358380D2e3dE08A90';
+const CHAIN_ID = 1; // Ethereum Mainnet
+const RPC_FALLBACK = 'https://eth.llamarpc.com';
+
+const ABI = [
+    "function currentRoundInfo() view returns (uint256 roundId, uint256 startTime, uint256 endTime, uint256 timeLeft, uint8 phase, uint256 potEth, uint32 guessCount, uint32 scoringCursor)",
+    "function rounds(uint256) view returns (uint8 phase, uint256 potEth, uint256 vrfRequestId, uint24 winningNumber, uint8 topScore, uint32 topScorerCount, uint256 winnerShareEth, uint256 settleRewardPool, uint32 guessCount, uint32 scoringCursor)",
+    "function balanceOf(address) view returns (uint256)",
+    "function STAKE_PER_GUESS() view returns (uint256)",
+    "function getPlayerGuesses(uint256 roundId, address player) view returns (uint32[])",
+    "function guesses(uint256, uint32) view returns (address player, uint24 digits, uint256 stake, bool redeemed, bool claimed)",
+    "function submitGuess(uint24 digits)",
+    "function roll()",
+    "function settleRound(uint256 roundId, uint32 batchSize)",
+    "function claimPrize(uint256 roundId, uint32 guessIndex)",
+    "function redeemStake(uint256 roundId, uint32 guessIndex)",
+    "function estimateVRFCost() view returns (uint256)",
+
+    "event GuessSubmitted(uint256 indexed roundId, address indexed player, uint32 guessIndex, uint24 digits)",
+    "event RollRequested(uint256 indexed roundId, uint256 vrfRequestId, address indexed caller, uint256 callerBounty, uint256 vrfCost, uint256 potEth)",
+    "event VRFReceived(uint256 indexed roundId, uint24 winningNumber)",
+    "event RoundSettled(uint256 indexed roundId, uint24 winningNumber, uint8 topScore, uint32 topScorerCount, uint256 winnerShareEth)",
+];
+
+// ────────── STATE ──────────
 const SHORT = CONTRACT.slice(0, 6) + '…' + CONTRACT.slice(-4);
 document.getElementById('footerAddr').textContent = SHORT;
 
-const mock = {
-    roundId: 47,
-    timeLeft: 14 * 60 + 23,
-    potEth: 0.847,
-    guessCount: 23,
-    playersCount: 11,
-    myBalance: 0,
-    myTickets: [],
-    phase: 'Open',  // Open | Rolling | Scoring | Settled
+const PHASES = ['Open', 'Rolling', 'Scoring', 'Settled'];
+
+let provider = null;        // read-only provider
+let signer = null;          // wallet signer
+let contract = null;        // read-only contract
+let contractW = null;       // write contract (signer)
+let userAddr = null;
+
+const state = {
+    roundId: 0,
+    startTime: 0,
+    endTime: 0,
+    timeLeft: 0,
+    phase: 'Open',
+    potEth: 0,
+    guessCount: 0,
     scoringCursor: 0,
+    winningNumber: null,
+    myBalance: 0n,
+    myTickets: [],
     connected: false,
 };
 
+// ────────── PROVIDER SETUP ──────────
+function getReadProvider() {
+    // Prefer injected provider for free reads, fall back to public RPC
+    if (window.ethereum) {
+        return new ethers.BrowserProvider(window.ethereum);
+    }
+    return new ethers.JsonRpcProvider(RPC_FALLBACK);
+}
+
+async function initRead() {
+    provider = getReadProvider();
+    contract = new ethers.Contract(CONTRACT, ABI, provider);
+}
+
+// ────────── ALTAR ANIMATION (cosmetic) ──────────
 const altarEl = document.getElementById('altarDigits');
 function rotateAltar() {
     if (Math.random() > 0.5) {
@@ -1034,6 +1086,7 @@ function rotateAltar() {
 altarEl.textContent = '142857'.split('').join(' ');
 setInterval(rotateAltar, 800);
 
+// ────────── HELPERS ──────────
 function fmtTime(secs) {
     if (secs <= 0) return '00:00';
     const m = Math.floor(secs / 60);
@@ -1041,54 +1094,132 @@ function fmtTime(secs) {
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
-function updateLiveBand() {
-    document.getElementById('timeLeft').textContent = mock.phase === 'Open' ? fmtTime(mock.timeLeft) : '——';
-    document.getElementById('timeLeftSub').textContent = `Round ${mock.roundId} · ${mock.phase.toLowerCase()}`;
-    document.getElementById('potEth').textContent = mock.potEth.toFixed(3);
-    document.getElementById('guessCount').textContent = mock.guessCount;
-    document.getElementById('playersCount').textContent = `${mock.playersCount} players`;
-    document.getElementById('myTicketsCount').textContent = mock.myTickets.length;
-    document.getElementById('myStakeAmt').textContent = `${mock.myTickets.length} M PYRE staked`;
-    document.getElementById('myBalance').textContent = mock.myBalance.toLocaleString() + ' PYRE';
-    document.getElementById('potIfWin').textContent = '~' + (mock.potEth * 0.94).toFixed(3) + ' ETH';
+function fmtEth(wei) {
+    return parseFloat(ethers.formatEther(wei)).toFixed(4);
+}
+
+function fmtPyre(wei) {
+    const n = parseFloat(ethers.formatEther(wei));
+    if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M';
+    if (n >= 1_000) return (n / 1_000).toFixed(2) + 'K';
+    return n.toFixed(0);
+}
+
+// ────────── ON-CHAIN FETCH ──────────
+async function fetchRoundData() {
+    try {
+        const info = await contract.currentRoundInfo();
+        state.roundId       = Number(info.roundId);
+        state.startTime     = Number(info.startTime);
+        state.endTime       = Number(info.endTime);
+        state.timeLeft      = Number(info.timeLeft);
+        state.phase         = PHASES[Number(info.phase)] || 'Open';
+        state.potEth        = info.potEth;
+        state.guessCount    = Number(info.guessCount);
+        state.scoringCursor = Number(info.scoringCursor);
+
+        // If we are in Scoring/Settled, also read winning number
+        if (state.phase === 'Scoring' || state.phase === 'Settled') {
+            const r = await contract.rounds(state.roundId);
+            state.winningNumber = Number(r.winningNumber);
+        } else {
+            state.winningNumber = null;
+        }
+    } catch (e) {
+        console.error('fetchRoundData failed:', e);
+    }
+}
+
+async function fetchMyData() {
+    if (!userAddr) return;
+    try {
+        const [bal, ids] = await Promise.all([
+            contract.balanceOf(userAddr),
+            contract.getPlayerGuesses(state.roundId, userAddr),
+        ]);
+        state.myBalance = bal;
+
+        // Get all guess details for the player
+        const tickets = [];
+        for (const idx of ids) {
+            const g = await contract.guesses(state.roundId, idx);
+            tickets.push({
+                idx: Number(idx),
+                digits: Number(g.digits),
+                round: state.roundId,
+                redeemed: g.redeemed,
+                claimed: g.claimed,
+            });
+        }
+        state.myTickets = tickets;
+    } catch (e) {
+        console.error('fetchMyData failed:', e);
+    }
+}
+
+// ────────── RENDER ──────────
+function render() {
+    document.getElementById('timeLeft').textContent =
+        state.phase === 'Open' ? fmtTime(state.timeLeft) : '——';
+    document.getElementById('timeLeftSub').textContent =
+        `Round ${state.roundId} · ${state.phase.toLowerCase()}`;
+    document.getElementById('potEth').textContent =
+        parseFloat(ethers.formatEther(state.potEth || 0n)).toFixed(3);
+    document.getElementById('guessCount').textContent = state.guessCount;
+    document.getElementById('playersCount').textContent = `${state.guessCount} guesses`;
+
+    document.getElementById('myTicketsCount').textContent = state.myTickets.length;
+    document.getElementById('myStakeAmt').textContent =
+        `${state.myTickets.length}M PYRE staked`;
+
+    document.getElementById('myBalance').textContent =
+        state.connected ? fmtPyre(state.myBalance) + ' PYRE' : '— connect wallet';
+    document.getElementById('potIfWin').textContent =
+        '~' + parseFloat(ethers.formatEther((state.potEth || 0n) * 94n / 100n)).toFixed(3) + ' ETH';
 
     const badge = document.getElementById('phaseBadge');
-    badge.textContent = mock.phase;
+    badge.textContent = state.phase;
     badge.className = 'badge ' + (
-        mock.phase === 'Open' ? '' :
-        mock.phase === 'Scoring' ? 'scoring' :
+        state.phase === 'Open' ? '' :
+        state.phase === 'Scoring' ? 'scoring' :
         'closed'
     );
 
-    document.getElementById('ticketsBadge').textContent = `Round ${mock.roundId}`;
+    document.getElementById('ticketsBadge').textContent = `Round ${state.roundId}`;
 
     // Scoring banner
     const banner = document.getElementById('scoringBanner');
-    if (mock.phase === 'Scoring') {
+    if (state.phase === 'Scoring') {
         banner.classList.add('active');
-        const total = mock.guessCount;
-        const cursor = mock.scoringCursor;
+        const total = state.guessCount;
+        const cursor = state.scoringCursor;
         const pct = total > 0 ? (cursor / total) * 100 : 0;
         document.getElementById('scoringProgress').style.width = pct + '%';
         document.getElementById('scoringCursor').textContent = `${cursor} / ${total} scored`;
-        const bountyLeft = (mock.potEth * 0.05) * (1 - cursor / total);
-        document.getElementById('scoringReward').textContent = `≈ ${bountyLeft.toFixed(3)} ETH bounty left`;
-        // Use the winning number
-        if (mock.winningNumber !== undefined) {
-            document.getElementById('scoringNumber').textContent = String(mock.winningNumber).padStart(6, '0').split('').join(' ');
+        document.getElementById('scoringReward').textContent =
+            `≈ ${parseFloat(ethers.formatEther((state.potEth || 0n) * 5n / 100n)).toFixed(3)} ETH bounty left`;
+        if (state.winningNumber !== null) {
+            document.getElementById('scoringNumber').textContent =
+                String(state.winningNumber).padStart(6, '0').split('').join(' ');
         }
     } else {
         banner.classList.remove('active');
     }
+
+    renderTickets();
 }
 
-function updateMyTickets() {
+function renderTickets() {
     const el = document.getElementById('myTickets');
-    if (mock.myTickets.length === 0) {
-        el.innerHTML = `<div class="empty-state"><div class="glyph">⌖</div>No tickets yet.<br>Submit a guess to play.</div>`;
+    if (!state.connected) {
+        el.innerHTML = `<div class="empty-state"><div class="glyph">⌖</div>Connect wallet to see your tickets.</div>`;
         return;
     }
-    el.innerHTML = mock.myTickets.map(t => `
+    if (state.myTickets.length === 0) {
+        el.innerHTML = `<div class="empty-state"><div class="glyph">⌖</div>No tickets this round.<br>Submit a guess to play.</div>`;
+        return;
+    }
+    el.innerHTML = state.myTickets.map(t => `
         <div class="ticket">
             <div class="ticket-number">${String(t.digits).padStart(6, '0').split('').join(' ')}</div>
             <div class="ticket-meta">1.0M staked<br>Round ${t.round}</div>
@@ -1096,7 +1227,7 @@ function updateMyTickets() {
     `).join('');
 }
 
-// Digit input behavior
+// ────────── DIGIT INPUTS ──────────
 const inputs = document.querySelectorAll('.digit-input');
 inputs.forEach((input, i) => {
     input.addEventListener('input', (e) => {
@@ -1123,83 +1254,128 @@ function readDigits() {
     return parseInt(s, 10);
 }
 
+// ────────── WALLET CONNECT ──────────
 document.getElementById('connectBtn').addEventListener('click', async () => {
-    if (mock.connected || !window.ethereum) {
-        if (!window.ethereum) alert('No wallet detected.');
+    if (!window.ethereum) {
+        alert('No wallet detected. Install MetaMask, OKX Wallet, or Rabby.');
         return;
     }
     try {
+        // Check chain
+        const chainIdHex = await window.ethereum.request({ method: 'eth_chainId' });
+        if (parseInt(chainIdHex, 16) !== CHAIN_ID) {
+            try {
+                await window.ethereum.request({
+                    method: 'wallet_switchEthereumChain',
+                    params: [{ chainId: '0x1' }],
+                });
+            } catch (err) {
+                alert('Please switch to Ethereum Mainnet.');
+                return;
+            }
+        }
+
         const accs = await window.ethereum.request({ method: 'eth_requestAccounts' });
-        mock.connected = true;
-        mock.myBalance = 5_000_000;
-        const a = accs[0];
+        userAddr = accs[0];
+        signer = await provider.getSigner();
+        contractW = new ethers.Contract(CONTRACT, ABI, signer);
+        state.connected = true;
+
         const btn = document.getElementById('connectBtn');
-        btn.textContent = a.slice(0, 6) + '…' + a.slice(-4);
+        btn.textContent = userAddr.slice(0, 6) + '…' + userAddr.slice(-4);
         btn.classList.add('connected');
-        updateLiveBand();
-    } catch (e) { console.error(e); }
-});
 
-document.getElementById('submitBtn').addEventListener('click', () => {
-    if (!mock.connected) { document.getElementById('connectBtn').click(); return; }
-    if (mock.phase !== 'Open') { alert('Round is not accepting new guesses.'); return; }
-    const d = readDigits();
-    if (d === null) { alert('Fill all 6 digits.'); return; }
-    if (mock.myBalance < 1_000_000) { alert('Need at least 1,000,000 PYRE to stake.'); return; }
-    mock.myTickets.push({ digits: d, round: mock.roundId, idx: mock.myTickets.length });
-    mock.guessCount++;
-    mock.myBalance -= 1_000_000;
-    inputs.forEach(i => { i.value = ''; i.classList.remove('filled'); });
-    updateLiveBand();
-    updateMyTickets();
-});
-
-document.getElementById('settleBtn').addEventListener('click', () => {
-    if (!mock.connected) { document.getElementById('connectBtn').click(); return; }
-    if (mock.phase !== 'Scoring') return;
-    // Simulate processing a batch
-    const batchSize = Math.min(50, mock.guessCount - mock.scoringCursor);
-    mock.scoringCursor += batchSize;
-    updateLiveBand();
-    if (mock.scoringCursor >= mock.guessCount) {
-        setTimeout(() => {
-            mock.roundId++;
-            mock.timeLeft = 30 * 60;
-            mock.potEth = 0.02;
-            mock.guessCount = 0;
-            mock.playersCount = 0;
-            mock.scoringCursor = 0;
-            mock.myTickets = [];
-            mock.phase = 'Open';
-            updateLiveBand();
-            updateMyTickets();
-        }, 1500);
+        await fetchMyData();
+        render();
+    } catch (e) {
+        console.error(e);
+        alert('Connect failed: ' + (e.message || e));
     }
 });
 
-// Timer
+// ────────── ACTIONS ──────────
+document.getElementById('submitBtn').addEventListener('click', async () => {
+    if (!state.connected) { document.getElementById('connectBtn').click(); return; }
+    if (state.phase !== 'Open') { alert('Round is not accepting guesses.'); return; }
+    const d = readDigits();
+    if (d === null) { alert('Fill all 6 digits.'); return; }
+
+    const STAKE = ethers.parseEther('1000000');
+    if (state.myBalance < STAKE) {
+        alert('Need at least 1,000,000 PYRE (0.1% supply) to stake.');
+        return;
+    }
+
+    try {
+        const btn = document.getElementById('submitBtn');
+        btn.disabled = true;
+        btn.textContent = 'Submitting…';
+
+        const tx = await contractW.submitGuess(d);
+        btn.textContent = 'Waiting…';
+        await tx.wait();
+
+        inputs.forEach(i => { i.value = ''; i.classList.remove('filled'); });
+        await fetchRoundData();
+        await fetchMyData();
+        render();
+
+        btn.textContent = 'Submit guess';
+        btn.disabled = false;
+    } catch (e) {
+        console.error(e);
+        alert('Submit failed: ' + (e.reason || e.shortMessage || e.message || e));
+        const btn = document.getElementById('submitBtn');
+        btn.textContent = 'Submit guess';
+        btn.disabled = false;
+    }
+});
+
+document.getElementById('settleBtn').addEventListener('click', async () => {
+    if (!state.connected) { document.getElementById('connectBtn').click(); return; }
+    if (state.phase !== 'Scoring') return;
+    try {
+        const btn = document.getElementById('settleBtn');
+        btn.disabled = true;
+        btn.textContent = 'Settling…';
+        const tx = await contractW.settleRound(state.roundId, 200);
+        await tx.wait();
+        await fetchRoundData();
+        render();
+        btn.textContent = 'Settle batch';
+        btn.disabled = false;
+    } catch (e) {
+        console.error(e);
+        alert('Settle failed: ' + (e.reason || e.shortMessage || e.message || e));
+        const btn = document.getElementById('settleBtn');
+        btn.textContent = 'Settle batch';
+        btn.disabled = false;
+    }
+});
+
+// ────────── POLLING + TIMER ──────────
+async function fullRefresh() {
+    await fetchRoundData();
+    if (state.connected) await fetchMyData();
+    render();
+}
+
+// Local 1s timer countdown (no RPC call)
 setInterval(() => {
-    if (mock.phase === 'Open') {
-        if (mock.timeLeft > 0) {
-            mock.timeLeft--;
-            mock.potEth += Math.random() * 0.002;
-            updateLiveBand();
-        } else {
-            mock.phase = 'Rolling';
-            updateLiveBand();
-            // Simulate VRF arriving in 20s
-            setTimeout(() => {
-                mock.winningNumber = Math.floor(Math.random() * 1000000);
-                mock.phase = 'Scoring';
-                mock.scoringCursor = 0;
-                updateLiveBand();
-            }, 5000);
-        }
+    if (state.phase === 'Open' && state.timeLeft > 0) {
+        state.timeLeft--;
+        document.getElementById('timeLeft').textContent = fmtTime(state.timeLeft);
     }
 }, 1000);
 
-updateLiveBand();
-updateMyTickets();
+// Refresh chain state every 12s (~1 block)
+setInterval(fullRefresh, 12_000);
+
+// ────────── BOOT ──────────
+(async () => {
+    await initRead();
+    await fullRefresh();
+})();
 </script>
 </body>
 </html>
